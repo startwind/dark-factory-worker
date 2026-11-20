@@ -29,8 +29,7 @@ async function init(): Promise<WorkerConfig> {
   if (flag('--max-jobs')) cfg.worker.maxConcurrentJobs = Number(flag('--max-jobs'));
   cfg = mergeDiscovery(cfg, await discoverAgents());
   for (const [k, e] of Object.entries(cfg.agents)) {
-    console.log(`  found ${k}: ${e.path} ${e.version ? `(${e.version})` : ''}  runtime=${e.runtime}`);
-    if (e.runtime === 'host') console.log(`    ⚠ no API key in the environment -> ${k} runs on the HOST (weaker isolation; project commands still run in the container).\n      For full isolation export the agent's API key and set runtime: container in the YAML.`);
+    console.log(`  found ${k}: ${e.path} ${e.version ? `(${e.version})` : ''}`);
   }
   if (!Object.keys(cfg.agents).length) console.log('  no agents found (codex / claude). You can add manual entries to the YAML.');
   if (args.includes('--with-mock') && process.env.NOVA_ALLOW_MOCK === 'true') {
@@ -85,7 +84,7 @@ async function main() {
   init        discover + test agents, write worker.config.yaml   [--name N] [--server ws://host:3001] [--max-jobs N]
   discover    re-discover agents (source: auto is updated, source: manual is never touched)
   test [key]  test configured agents (must answer READY)
-  doctor      check required tools (git, container runtime, ssh key, gh) and print what is missing
+  doctor      check required tools (git, ssh key, gh) and print what is missing
   start       connect to the master app and process jobs (runs init on first start)
 `);
   }

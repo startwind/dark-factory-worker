@@ -8,20 +8,6 @@ import { run, withPath } from './proc.js';
 
 const firstLine = (s: string) => s.split('\n').find((l) => l.trim())?.trim().slice(0, 200) ?? '';
 
-async function runtimeCheck(cmd: string): Promise<WorkerToolCheck> {
-  const base = { id: 'container-runtime', label: `Container runtime (${cmd})`, severity: 'recommended' as const };
-  const path = cmd.includes('/') ? cmd : which(cmd);
-  if (!path) {
-    const alt = cmd === 'podman' ? 'docker' : 'podman';
-    const altFound = which(alt);
-    return { ...base, ok: false, message: `${cmd} is not installed`, hint: altFound ? `${alt} was found: set \`podman.command: ${alt}\` in worker.config.yaml, or install ${cmd}.` : 'Install Podman (brew install podman) or Docker.' };
-  }
-  const r = await run(path, ['info'], { env: withPath(), timeoutMs: 20_000 });
-  const version = await versionOf(path, ['--version']);
-  if (r.code !== 0) return { ...base, ok: false, version, message: `${cmd} is installed but not reachable: ${firstLine(r.stderr || r.stdout)}`, hint: cmd === 'podman' ? 'Start it: podman machine start' : 'Start the Docker daemon / Docker Desktop.' };
-  return { ...base, ok: true, version, message: 'reachable' };
-}
-
 async function sshKeyCheck(): Promise<WorkerToolCheck> {
   const base = { id: 'ssh-key', label: 'SSH key for GitHub', severity: 'recommended' as const };
   const agent = await run('ssh-add', ['-l'], { env: withPath(), timeoutMs: 8_000 });
@@ -41,7 +27,6 @@ export async function runPreflight(cfg: WorkerConfig): Promise<WorkerHealth> {
     checks.push(p ? { id, label, ok: true, severity, version, message: 'installed' } : { id, label, ok: false, severity, message: `${name} not found in PATH`, hint });
   };
   await bin('git', 'git', 'git', ['--version'], 'required', 'Install git (brew install git).');
-  checks.push(await runtimeCheck(cfg.podman.command));
   await bin('ssh', 'ssh client', 'ssh', ['-V'], 'recommended', 'Install an OpenSSH client.');
   checks.push(await sshKeyCheck());
   await bin('gh', 'GitHub CLI (gh)', 'gh', ['--version'], 'recommended', 'Install the GitHub CLI (brew install gh). The worker creates pull requests with it.');

@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
-# Dark Factory worker installer.
-#   curl -fsSL https://raw.githubusercontent.com/startwind/dark-factory-worker/main/install.sh | bash
+# Dark Factory worker installer: installs everything, sets the worker up and starts it.
+#
+#   curl -fsSL https://raw.githubusercontent.com/startwind/dark-factory-worker/main/install.sh | bash -s -- --server ws://APP-HOST:3001
+#
+# Options:
+#   --server URL   URL of the Dark Factory app (default: ws://localhost:3001)
+#   --name NAME    worker name (default: derived from the hostname)
+#   --no-start     install and configure only, do not start the worker
 # Re-running it updates an existing installation.
 #
 # Environment overrides:
@@ -13,17 +19,41 @@ REPO="${DARK_FACTORY_REPO:-https://github.com/startwind/dark-factory-worker.git}
 DIR="${DARK_FACTORY_HOME:-$HOME/.dark-factory-worker}"
 BIN="${DARK_FACTORY_BIN:-$HOME/.local/bin}"
 NAME="dark-factory-worker"
+SERVER=""; WORKER_NAME=""; START=1; ORIGINAL_PATH="$PATH"
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --server)   SERVER="${2:?--server needs a URL}"; shift 2 ;;
+    --name)     WORKER_NAME="${2:?--name needs a value}"; shift 2 ;;
+    --no-start) START=0; shift ;;
+    -h|--help)  echo "Usage: install.sh [--server ws://APP-HOST:3001] [--name NAME] [--no-start]"; exit 0 ;;
+    *) printf 'Unknown option: %s\n' "$1" >&2; exit 2 ;;
+  esac
+done
 
 say()  { printf '\033[1m==> %s\033[0m\n' "$*"; }
 warn() { printf '\033[33m!   %s\033[0m\n' "$*"; }
 die()  { printf '\033[31mError: %s\033[0m\n' "$*" >&2; exit 1; }
+have() { command -v "$1" >/dev/null 2>&1; }
+has_tty() { [ -r /dev/tty ] && (: </dev/tty) 2>/dev/null; }
 
-command -v git  >/dev/null 2>&1 || die "git is required (macOS: xcode-select --install, or brew install git)"
-command -v node >/dev/null 2>&1 || die "Node.js >= 22 is required (macOS: brew install node)"
-command -v npm  >/dev/null 2>&1 || die "npm is required (it ships with Node.js)"
-NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]')"
-[ "$NODE_MAJOR" -ge 22 ] || die "Node.js >= 22 is required (found $(node -v))"
+# --- prerequisites (installed with Homebrew when it is available) ---
+brew_install() {
+  have brew || die "$1 is missing and Homebrew is not installed. Install $1 (or Homebrew from https://brew.sh) and run this again."
+  say "Installing $1 with Homebrew"
+  brew install "$2"
+}
+have git  || brew_install git git
+have node || brew_install "Node.js" node
+have npm  || die "npm is missing (it ships with Node.js)"
+node_major() { node -p 'process.versions.node.split(".")[0]'; }
+if [ "$(node_major)" -lt 22 ]; then
+  have brew && { say "Node.js $(node -v) is too old, upgrading with Homebrew"; brew upgrade node || brew install node; hash -r; }
+  [ "$(node_major)" -ge 22 ] || die "Node.js >= 22 is required (found $(node -v))"
+fi
+have gh || { have brew && brew_install "GitHub CLI" gh || warn "GitHub CLI (gh) not found - needed for pull requests"; }
 
+# --- worker code ---
 if [ -d "$DIR/.git" ]; then
   say "Updating $DIR"
   git -C "$DIR" pull --ff-only
@@ -32,10 +62,10 @@ else
   say "Cloning into $DIR"
   git clone --depth 1 "$REPO" "$DIR"
 fi
-
 say "Installing dependencies"
 (cd "$DIR" && npm install --no-audit --no-fund --loglevel=error)
 
+# --- launcher ---
 say "Creating launcher $BIN/$NAME"
 mkdir -p "$BIN" "$HOME/.nova-worker"
 cat > "$BIN/$NAME" <<LAUNCHER
@@ -45,21 +75,32 @@ export NOVA_WORKER_CONFIG="\${NOVA_WORKER_CONFIG:-\$HOME/.nova-worker/worker.con
 exec node "$DIR/apps/worker/bin/nova-worker.mjs" "\$@"
 LAUNCHER
 chmod +x "$BIN/$NAME"
+export PATH="$BIN:$PATH"
 
-case ":$PATH:" in
-  *":$BIN:"*) ;;
-  *) warn "$BIN is not in your PATH. Add it, e.g.:  echo 'export PATH=\"$BIN:\$PATH\"' >> ~/.zshrc  (then open a new terminal)" ;;
-esac
+# --- GitHub login (needed to open pull requests) ---
+if have gh && ! gh auth status >/dev/null 2>&1; then
+  if has_tty; then say "GitHub CLI login"; gh auth login </dev/tty || warn "gh login skipped - run: gh auth login"
+  else warn "GitHub CLI is not logged in - run: gh auth login"; fi
+fi
+[ -e "$HOME/.ssh/id_ed25519" ] || [ -e "$HOME/.ssh/id_rsa" ] || [ -e "$HOME/.ssh/id_ecdsa" ] || ssh-add -L >/dev/null 2>&1 \
+  || warn "No SSH key found. The worker needs one with push rights to your repositories (ssh-keygen -t ed25519, then add it to GitHub)."
 
-command -v gh >/dev/null 2>&1 || warn "GitHub CLI (gh) not found - needed for pull requests (macOS: brew install gh, then: gh auth login)"
+# --- configure ---
+say "Detecting agents (codex / claude)"
+INIT_ARGS=()
+[ -z "$SERVER" ]      || INIT_ARGS+=(--server "$SERVER")
+[ -z "$WORKER_NAME" ] || INIT_ARGS+=(--name "$WORKER_NAME")
+"$BIN/$NAME" init ${INIT_ARGS[@]+"${INIT_ARGS[@]}"} </dev/null
+say "Checking tools"
+"$BIN/$NAME" doctor </dev/null || true
 
-cat <<DONE
+# --- PATH hint ---
+if ! echo ":${ORIGINAL_PATH:-}:" | grep -q ":$BIN:"; then
+  warn "To use '$NAME' in new terminals add $BIN to your PATH:  echo 'export PATH=\"$BIN:\$PATH\"' >> ~/.zshrc"
+fi
 
-Installed. Next steps:
-
-  $NAME doctor                                  # check git, SSH key, gh
-  $NAME init --server ws://<app-host>:3001      # find agents (codex/claude), write the config
-  $NAME start                                   # connect to the app; approve it there under Workers
-
-Update later by re-running this installer. Remove with: rm -rf "$DIR" "$BIN/$NAME"
-DONE
+if [ "$START" = 1 ]; then
+  say "Starting the worker (Ctrl+C to stop). It shows up in the app under Workers as Pending - approve it there."
+  exec "$BIN/$NAME" start </dev/null
+fi
+printf '\nDone. Start it with:  %s start\nUpdate later by re-running the installer.\n' "$NAME"
