@@ -1,0 +1,17 @@
+{
+  "name": "@nova/worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": { "nova-worker": "./bin/nova-worker.mjs" },
+  "scripts": {
+    "start": "tsx src/cli.ts",
+    "typecheck": "tsc -p . --noEmit"
+  },
+  "dependencies": {
+    "@nova/shared": "*",
+    "@nova/workflow-engine": "*",
+    "socket.io-client": "^4.8.1",
+    "yaml": "^2.7.0"
+  }
+}

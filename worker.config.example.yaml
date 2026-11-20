@@ -1,0 +1,29 @@
+# Example nova-worker config. `nova-worker init` generates this automatically.
+# Only technical settings live here. Projects, permissions, Jira component
+# preferences/exclusions and log sharing are managed in the master app.
+# Jobs run directly on this host (no container isolation).
+worker:
+  name: nils-mac
+  maxConcurrentJobs: 1        # complete tickets processed in parallel (each: own workspace and branch)
+  maxParallelSteps: 2         # independent steps (no open dependencies) of ONE ticket run at the same time; 1 = always one after the other.
+                              # Parallel steps share the same checkout.
+server:
+  url: ws://localhost:3001
+agents:
+  codex:
+    source: auto              # auto: may be updated by `nova-worker discover`
+    command: codex
+    enabled: true
+    runtime: host
+  claude:
+    source: auto
+    command: claude
+    enabled: true
+    runtime: host
+  my-custom-agent:            # source: manual is NEVER overwritten or deleted by discovery
+    source: manual
+    kind: custom
+    command: my-agent-cli
+    args: ["--prompt", "{prompt}"]   # or `stdin: true` to send the prompt via stdin
+    enabled: true
+    runtime: host
