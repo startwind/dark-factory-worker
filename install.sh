@@ -82,8 +82,16 @@ if have gh && ! gh auth status >/dev/null 2>&1; then
   if has_tty; then say "GitHub CLI login"; gh auth login </dev/tty || warn "gh login skipped - run: gh auth login"
   else warn "GitHub CLI is not logged in - run: gh auth login"; fi
 fi
-[ -e "$HOME/.ssh/id_ed25519" ] || [ -e "$HOME/.ssh/id_rsa" ] || [ -e "$HOME/.ssh/id_ecdsa" ] || ssh-add -L >/dev/null 2>&1 \
-  || warn "No SSH key found. The worker needs one with push rights to your repositories (ssh-keygen -t ed25519, then add it to GitHub)."
+# --- SSH key (the worker clones and pushes with its own key) ---
+KEY_CREATED=0
+if ! ls "$HOME"/.ssh/id_ed25519 "$HOME"/.ssh/id_rsa "$HOME"/.ssh/id_ecdsa >/dev/null 2>&1 && ! ssh-add -L >/dev/null 2>&1; then
+  say "Creating an SSH key for this worker (~/.ssh/id_ed25519)"
+  mkdir -p "$HOME/.ssh" && chmod 700 "$HOME/.ssh"
+  ssh-keygen -q -t ed25519 -N "" -C "dark-factory-worker@$(hostname)" -f "$HOME/.ssh/id_ed25519"
+  KEY_CREATED=1
+fi
+PUBKEY_FILE=""
+for f in id_ed25519 id_rsa id_ecdsa; do [ -e "$HOME/.ssh/$f.pub" ] && { PUBKEY_FILE="$HOME/.ssh/$f.pub"; break; }; done
 
 # --- configure ---
 say "Detecting agents (codex / claude)"
@@ -97,6 +105,17 @@ say "Checking tools"
 # --- PATH hint ---
 if ! echo ":${ORIGINAL_PATH:-}:" | grep -q ":$BIN:"; then
   warn "To use '$NAME' in new terminals add $BIN to your PATH:  echo 'export PATH=\"$BIN:\$PATH\"' >> ~/.zshrc"
+fi
+
+if [ -n "$PUBKEY_FILE" ]; then
+  printf '\n\033[1mGit access for this worker\033[0m\n'
+  printf 'Public key (%s):\n\n  %s\n\n' "$PUBKEY_FILE" "$(cat "$PUBKEY_FILE")"
+  if [ "$KEY_CREATED" = 1 ]; then
+    printf 'It was just created. Add it to GitHub before the first job, one of:\n'
+    printf '  - per repository (recommended): Repo -> Settings -> Deploy keys -> Add deploy key, with write access\n'
+    printf '  - for all your repositories:    https://github.com/settings/ssh/new\n'
+    printf 'Pull requests additionally need:  gh auth login   (or a fine-grained GH_TOKEN with Contents + Pull requests)\n\n'
+  fi
 fi
 
 if [ "$START" = 1 ]; then
