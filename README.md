@@ -13,17 +13,33 @@ Der Worker der **Dark Factory**: ein Node-Prozess, der sich aktiv mit der [Dark-
 
 ## Installation
 
+Ein Befehl (klont nach `~/.dark-factory-worker`, installiert die Abhängigkeiten und legt den Befehl `dark-factory-worker` in `~/.local/bin` an):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/startwind/dark-factory-worker/main/install.sh | bash
+dark-factory-worker doctor     # prüft git, SSH-Key, gh und sagt, was fehlt
+```
+
+Erneutes Ausführen des Installers aktualisiert den Worker. Deinstallieren: `rm -rf ~/.dark-factory-worker ~/.local/bin/dark-factory-worker`. Die Konfiguration liegt in `~/.nova-worker/worker.config.yaml`. Anpassbar über `DARK_FACTORY_HOME`, `DARK_FACTORY_BIN` und `DARK_FACTORY_REPO`.
+
+Den Installer vor dem Ausführen ansehen: [install.sh](install.sh).
+
+<details><summary>Manuell statt Installer</summary>
+
 ```bash
 git clone https://github.com/startwind/dark-factory-worker.git
 cd dark-factory-worker
 npm install
-npm run worker -- doctor     # prüft git, SSH-Key, gh und sagt, was fehlt
+npm run worker -- doctor
 ```
+
+Dann statt `dark-factory-worker …` jeweils `npm run worker -- …` verwenden.
+</details>
 
 ## Einrichten
 
 ```bash
-npm run worker -- init       # findet codex/claude, führt den READY-Test aus, schreibt worker.config.yaml
+dark-factory-worker init     # findet codex/claude, führt den READY-Test aus, schreibt worker.config.yaml
 ```
 
 Optionen für `init`:
@@ -34,14 +50,14 @@ Optionen für `init`:
 | `--name <name>` | Name des Workers |
 | `--max-jobs <n>` | Tickets, die gleichzeitig bearbeitet werden (Standard 1) |
 
-Weitere Befehle: `discover` (Agenten erneut suchen), `test [agent]` (Agenten testen), `doctor` (Werkzeuge prüfen). Beispiel-Konfiguration: [worker.config.example.yaml](worker.config.example.yaml).
+Alle Befehle gibt es auch als `npm run worker -- <befehl>` im geklonten Repository. Weitere Befehle: `discover` (Agenten erneut suchen), `test [agent]` (Agenten testen), `doctor` (Werkzeuge prüfen). Beispiel-Konfiguration: [worker.config.example.yaml](worker.config.example.yaml).
 
 `source: auto`-Agenten werden bei `discover` aktualisiert, `source: manual`-Einträge nie überschrieben oder gelöscht.
 
 ## Starten
 
 ```bash
-npm run worker -- start --config worker.config.yaml
+dark-factory-worker start
 ```
 
 Der Worker hält die Verbindung per Socket.IO (Reconnect + Heartbeat) und identifiziert sich mit einem dauerhaften ed25519-Schlüsselpaar unter `~/.nova-worker/identity.json`.
@@ -76,5 +92,5 @@ Das Repository enthält den Worker (`apps/worker`) sowie die gemeinsamen Pakete 
 |---|---|
 | Worker bleibt *Pending* | In der App unter *Workers → Approve* freigeben |
 | Keine Verbindung | `--server` bzw. `server.url` prüfen; App muss vom Worker-Rechner erreichbar sein |
-| „Missing: …“-Badge in der App | `npm run worker -- doctor` ausführen, Hinweis befolgen, Worker neu starten |
+| „Missing: …“-Badge in der App | `dark-factory-worker doctor` ausführen, Hinweis befolgen, Worker neu starten |
 | Agent: „authentication failed“ | CLI-Login (`codex` / `claude`) auf diesem Rechner durchführen |
