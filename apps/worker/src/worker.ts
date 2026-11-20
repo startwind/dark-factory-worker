@@ -142,8 +142,8 @@ export class Worker {
   }
 
   private async onValidation(p: Parameters<typeof validateProject>[0]) {
-    this.log(`… validating Dockerfile for request ${p.requestId}`);
-    const result = await validateProject(p, this.podman, this.cfg);
+    this.log(`… checking repository access for request ${p.requestId}`);
+    const result = await validateProject(p);
     this.socket.emit('validation:result', { requestId: p.requestId, result });
     this.log(`${result.ok ? '✔' : '✘'} validation: ${result.message}`);
   }

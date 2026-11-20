@@ -123,6 +123,12 @@ export class Git {
   }
 }
 
+/** Read access check: `git ls-remote` on the default branch with the worker's own credentials. */
+export async function checkRemoteAccess(url: string, branch: string, auth: GitAuth) {
+  const { env, cleanup } = authEnv(auth);
+  try { return await run('git', ['ls-remote', '--exit-code', url, `refs/heads/${branch}`], { env, timeoutMs: 30_000 }); } finally { cleanup(); }
+}
+
 export class GitError extends Error {
   constructor(public op: string, detail: string) {
     super(`git ${op} failed: ${detail.trim().slice(-500)}`);
