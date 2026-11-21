@@ -49,17 +49,17 @@ export const STEP_CATALOG: StepTemplate[] = [
   tpl({
     id: 'run-tests', category: 'Quality',
     description: 'Runs the project\'s test suite (`npm test`) and fails the workflow when tests fail.',
-    step: { name: 'Run Tests', type: 'SHELL', command: 'if [ -f package.json ]; then npm test --if-present; else echo "No package.json - no tests to run"; fi', jiraComment: true, timeoutSec: 1800 },
+    step: { name: 'Run Tests', type: 'SHELL', command: 'if [ -f package.json ]; then npm test --if-present; else echo "No package.json - no tests to run"; fi', jiraComment: true, timeoutSec: 1800, requiresTools: ['node', 'npm'] },
   }),
   tpl({
     id: 'lint', category: 'Quality',
     description: 'Runs the linter (`npm run lint`) when the project defines one.',
-    step: { name: 'Lint', type: 'SHELL', command: 'npm run lint --if-present', timeoutSec: 600 },
+    step: { name: 'Lint', type: 'SHELL', command: 'npm run lint --if-present', timeoutSec: 600, requiresTools: ['node', 'npm'] },
   }),
   tpl({
     id: 'build', category: 'Quality',
     description: 'Builds the project (`npm run build`) to make sure the change compiles.',
-    step: { name: 'Build', type: 'SHELL', command: 'npm run build --if-present', timeoutSec: 1800 },
+    step: { name: 'Build', type: 'SHELL', command: 'npm run build --if-present', timeoutSec: 1800, requiresTools: ['node', 'npm'] },
   }),
   tpl({
     id: 'code-review', category: 'Quality',
@@ -77,6 +77,39 @@ export const STEP_CATALOG: StepTemplate[] = [
       name: 'Security Review', type: 'AI_PROMPT', jiraComment: true,
       prompt: 'Security-review the changes made so far. Check for OWASP Top 10 issues (injection, broken access control, XSS, SSRF, ...), secrets or credentials in code, unsafe deserialization, missing input validation and risky new dependencies. Do NOT fix anything yourself: the implementation step fixes the findings. If you find problems, set needs_rework to true and list every finding precisely in rework_notes (file, problem, severity, how to fix). Never print secret values.',
       expectedOutputs: [out('findings', 'number', 'Total number of findings'), out('critical', 'number', 'Findings with critical or high severity'), out('summary', 'string', 'Short summary of the findings')],
+    },
+  }),
+  tpl({
+    id: 'screenshots-before', category: 'Quality',
+    description: 'Takes BEFORE screenshots of the pages the ticket affects, ahead of the change (place it before the implementation step).',
+    step: {
+      name: 'Screenshots (before)', type: 'AI_PROMPT', timeoutSec: 2400,
+      requiresTools: ['node', 'playwright'],
+      artifacts: ['.nova/screenshots/plan.json', '.nova/screenshots/before/**'],
+      prompt: 'Capture BEFORE screenshots of the application, ahead of any change. Do NOT modify any tracked file in the repository.\n'
+        + '1. Read the ticket and decide which pages or views the change will visibly affect (at most 6).\n'
+        + '2. Find out how to start the app (README, package.json scripts, Dockerfile), start it in the background and wait until it answers (e.g. with curl).\n'
+        + '3. Write the plan to .nova/screenshots/plan.json: an array of {"name": "<short-kebab-case-id>", "url": "<url>", "steps": ["<optional manual action, e.g. click the Settings tab>"]}.\n'
+        + '4. With Playwright (chromium, viewport 1440x900, full page) save one PNG per plan entry as .nova/screenshots/before/<name>.png. Use the same settings for every shot.\n'
+        + '5. Stop the app again.\n'
+        + 'If the app cannot be started or has no UI, take no screenshots, report screenshots = 0 and explain why in the summary.',
+      expectedOutputs: [out('screenshots', 'number', 'Number of screenshots you saved'), out('summary', 'string', 'Which pages you captured and how the app was started')],
+    },
+  }),
+  tpl({
+    id: 'screenshots-after', category: 'Quality',
+    description: 'Takes AFTER screenshots of the same pages as the before step, with the change applied (place it after the implementation step).',
+    step: {
+      name: 'Screenshots (after)', type: 'AI_PROMPT', timeoutSec: 2400,
+      requiresTools: ['node', 'playwright'],
+      artifacts: ['.nova/screenshots/after/**'],
+      prompt: 'Capture AFTER screenshots of the application with the change applied. Do NOT modify any tracked file in the repository.\n'
+        + '1. Read .nova/screenshots/plan.json written by the "Screenshots (before)" step. If it is missing, decide on the pages yourself from the ticket and the diff.\n'
+        + '2. Start the app again (README, package.json scripts, Dockerfile), in the background, and wait until it answers.\n'
+        + '3. With Playwright (chromium, viewport 1440x900, full page, same settings and same manual actions as before) save one PNG per plan entry as .nova/screenshots/after/<name>.png - the SAME <name> as in before/, so the pair can be compared. Pages that are new through this change get a new name (there is no before image for them).\n'
+        + '4. Stop the app again.\n'
+        + 'If the app cannot be started or has no UI, take no screenshots, report screenshots = 0 and explain why in the summary.',
+      expectedOutputs: [out('screenshots', 'number', 'Number of screenshots you saved'), out('summary', 'string', 'What visibly changed compared to the before screenshots')],
     },
   }),
   tpl({

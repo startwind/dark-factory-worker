@@ -2,11 +2,12 @@ import { execFile } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
-  extractJsonFromText, extractMetrics, extractObservation, makeRedactor, validateOutput,
+  ARTIFACT_LIMITS, extractJsonFromText, missingTools, requiredToolIds, extractMetrics, extractObservation, makeRedactor, validateOutput,
   type ErrorKind, type JobPayload, type ResolvedStep, type StepResultPayload,
 } from '@nova/shared';
 import { runWorkflow, type FailureFeedback, type StepExecutor, type StepOutcome } from '@nova/workflow-engine';
 import { adapterFor, shq } from './agents/adapters.js';
+import { collectArtifacts } from './artifacts.js';
 import type { AgentEntry, WorkerConfig } from './config.js';
 import { workspacesDir } from './config.js';
 import { Git, GitError, isConflict, mirrorDir } from './git.js';
@@ -14,6 +15,7 @@ import { LogSink, type StepSink } from './logSink.js';
 import { Podman } from './podman.js';
 import { buildPrompt, mockResult } from './prompt.js';
 import { run as runProc, withPath } from './proc.js';
+import { describeMissing, detectTools, hostShell, type ShellRunner } from './tools.js';
 
 export interface ServerLink {
   emit(event: string, payload: unknown): void;
@@ -39,6 +41,7 @@ export class JobRunner {
   private installed = new Set<string>();
   private installing = new Map<string, Promise<string | null>>();
   private branchPushed = false;
+  private artifactBytes = 0;
   /** false when the repo has no Dockerfile: everything runs directly on the worker host */
   private containerized: boolean;
 
@@ -125,6 +128,11 @@ export class JobRunner {
         this.link.emit('job:started', { runId: job.runId, assignmentId: job.assignmentId, containerId: this.container });
       }
 
+      // 3b) tools the steps depend on must exist where the steps run (container or host)
+      const lacking = await this.missingWorkspaceTools();
+      if (lacking.length) return await this.fail('TOOL_MISSING', `The workflow needs tool(s) that are not available ${this.containerized ? 'in the project container' : 'on the worker host'}: ${describeMissing(lacking)}`);
+      if (this.stopRequested) return await this.finishStopped();
+
       // 4) workflow: groups in order; steps of a group run in dependency order, as many at once as THIS worker allows
       const parallel = this.parallelLimit();
       sys(`Steps run ${parallel > 1 ? `up to ${parallel} at a time when they have no open dependencies` : 'one after the other'} (worker setting, limited by the container CPUs)`);
@@ -173,7 +181,46 @@ export class JobRunner {
     };
   }
 
+  /** Tools required by any step, checked in the environment the steps really run in (job container or worker host). */
+  private async missingWorkspaceTools(): Promise<string[]> {
+    const required = requiredToolIds(this.job.workflow.steps);
+    if (!required.length) return [];
+    const sh: ShellRunner = this.containerized
+      ? (script) => this.podman.sh(this.container, script, { timeoutMs: 30_000 })
+      : hostShell;
+    const found = await detectTools(sh, required);
+    const lacking = missingTools(required, found.filter((t) => t.available).map((t) => t.id));
+    this.sink.system(`Tools ${this.containerized ? 'in the container' : 'on the worker host'}: ${found.map((t) => `${t.id} ${t.available ? '✔' : '✘'}`).join(', ')}`, lacking.length ? 'warn' : 'info');
+    return [...lacking, ...required.filter((id) => !found.some((f) => f.id === id))].filter((x, i, a) => a.indexOf(x) === i);
+  }
+
+  /** Uploads the files a step declared as artifacts (screenshots, reports ...). Never fails the step: problems are logged. */
+  private async uploadArtifacts(step: ResolvedStep, attempt: number) {
+    if (!step.artifacts.length) return;
+    const sink = this.sink.forStep(step.id);
+    try {
+      const { files, skipped } = await collectArtifacts(this.workspace, step.artifacts);
+      for (const sk of skipped) sink.system(`Artifact skipped: ${sk}`, 'warn');
+      let sent = 0;
+      for (const f of files) {
+        if (this.artifactBytes + f.data.length > ARTIFACT_LIMITS.maxBytesPerRun) { sink.system(`Artifact skipped: ${f.path} (run limit of ${ARTIFACT_LIMITS.maxBytesPerRun / 1024 / 1024} MB reached)`, 'warn'); continue; }
+        const r = await this.link.call('artifact:upload', { runId: this.job.runId, stepId: step.id, attempt, path: f.path, mime: f.mime, data: f.data }, 60_000);
+        if (r.ok) { this.artifactBytes += f.data.length; sent++; } else sink.system(`Artifact upload failed for ${f.path}: ${r.error ?? 'unknown error'}`, 'warn');
+      }
+      sink.system(files.length || skipped.length ? `Uploaded ${sent} artifact file(s) (${step.artifacts.join(', ')})` : `No files matched the artifact pattern(s): ${step.artifacts.join(', ')}`, files.length ? 'info' : 'warn');
+    } catch (e) {
+      sink.system(`Could not collect artifacts: ${(e as Error).message}`, 'warn');
+    }
+  }
+
   private async executeStep(step: ResolvedStep, attempt: number, feedback?: FailureFeedback): Promise<StepOutcome> {
+    const outcome = await this.runStepBody(step, attempt, feedback);
+    // failed steps keep their files too (a screenshot of the broken page is exactly what you want to see); stopped ones do not
+    if (outcome.status !== 'STOPPED' && !this.stopRequested) await this.uploadArtifacts(step, attempt);
+    return outcome;
+  }
+
+  private async runStepBody(step: ResolvedStep, attempt: number, feedback?: FailureFeedback): Promise<StepOutcome> {
     if (this.stopRequested) return { status: 'STOPPED' };
     switch (step.type) {
       case 'AI_PROMPT': return this.aiStep(step, attempt, feedback);

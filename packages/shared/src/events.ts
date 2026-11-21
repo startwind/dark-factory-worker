@@ -1,3 +1,4 @@
+import type { WorkerToolInfo } from './toolCatalog.js';
 import type { ResolvedWorkflow } from './workflow.js';
 
 export type AgentKind = 'codex' | 'claude' | 'mock' | 'custom';
@@ -37,6 +38,8 @@ export interface WorkerHello {
   platform: string;
   maxConcurrentJobs: number;
   agents: WorkerAgentInfo[];
+  /** result of the tool catalog check on the worker host */
+  tools?: WorkerToolInfo[];
   activeJobs: string[]; // runIds the worker is still executing (reconnect)
   version: string;
   health?: WorkerHealth;
@@ -75,6 +78,19 @@ export interface JobPayload {
   limits: { memory: string; cpus: string; pids: number; stepTimeoutSec: number };
   retry: { technicalRetries: number; jsonCorrectionAttempts: number };
   factoryRunUrl: string;
+}
+
+/** Limits for step artifacts (enforced by the worker before and by the server after the upload). */
+export const ARTIFACT_LIMITS = { maxFileBytes: 4 * 1024 * 1024, maxFilesPerStep: 40, maxBytesPerRun: 64 * 1024 * 1024 } as const;
+
+export interface ArtifactUploadPayload {
+  runId: string;
+  stepId: string;
+  attempt: number;
+  /** path relative to the workspace, e.g. ".nova/screenshots/after/home.png" */
+  path: string;
+  mime: string;
+  data: Uint8Array;
 }
 
 export type LogStream = 'stdout' | 'stderr' | 'system';
@@ -117,6 +133,7 @@ export type ErrorKind =
   | 'WORKER_OFFLINE'
   | 'WORKER_CRASHED'
   | 'COMMAND_FAILED'
+  | 'TOOL_MISSING'
   | 'REWORK_EXHAUSTED'
   | 'TIMEOUT'
   | 'STOPPED'
@@ -140,7 +157,7 @@ export type Ack<T = unknown> = (res: { ok: true; data?: T } | { ok: false; error
 /** worker -> server */
 export interface WorkerToServer {
   'worker:heartbeat': (p: { activeJobs: string[]; freeSlots: number }, ack?: Ack) => void;
-  'worker:capabilities': (p: { agents: WorkerAgentInfo[]; maxConcurrentJobs: number }, ack?: Ack) => void;
+  'worker:capabilities': (p: { agents: WorkerAgentInfo[]; tools?: WorkerToolInfo[]; maxConcurrentJobs: number }, ack?: Ack) => void;
   /** progress of a self-update the web app asked for */
   'worker:update-status': (p: { state: 'updating' | 'restarting' | 'failed'; message: string }) => void;
   'worker:status': (p: { freeSlots: number; activeJobs: string[] }) => void;
@@ -159,6 +176,8 @@ export interface WorkerToServer {
   'step:completed': (p: StepResultPayload, ack?: Ack) => void;
   'step:failed': (p: StepResultPayload, ack?: Ack) => void;
   'step:awaiting-approval': (p: { runId: string; stepId: string }, ack?: Ack) => void;
+  /** a file a step produced (see StepDef.artifacts); `data` is the raw file content */
+  'artifact:upload': (p: ArtifactUploadPayload, ack?: Ack<{ id: string }>) => void;
   'log:chunk': (p: { runId: string; chunks: LogChunk[] }, ack?: Ack<{ lastSeq: number }>) => void;
   'pr:create': (
     p: { runId: string; branch: string; summary: string },

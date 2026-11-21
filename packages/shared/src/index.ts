@@ -7,3 +7,4 @@ export * from './events.js';
 export * from './constants.js';
 export * from './versions.js';
 export * from './statusMapping.js';
+export * from './toolCatalog.js';

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { RESERVED_OUTPUT_KEYS } from './output.js';
+import { TOOL_IDS } from './toolCatalog.js';
 import type { StatusTargets } from './statusMapping.js';
 
 export const OutputTypeSchema = z.enum(['string', 'number', 'boolean', 'array', 'object']);
@@ -84,6 +85,16 @@ export const StepDefSchema = z.object({
    * The worker decides how many steps it really runs at the same time.
    */
   dependsOn: z.array(z.string()).optional(),
+  /**
+   * Tools (ids of the tool catalog) this step needs. A run is only given to a worker that reports all of them; for container jobs
+   * the worker re-checks inside the project container before the first step.
+   */
+  requiresTools: z.array(z.string()).default([]),
+  /**
+   * Files the step produces and that should be kept with the run (screenshots, reports ...): glob patterns relative to the
+   * workspace, e.g. `.nova/screenshots/after/**`. The worker uploads the matches after the step finished.
+   */
+  artifacts: z.array(z.string().min(1).max(200)).max(10).default([]),
   timeoutSec: z.number().int().min(10).max(24 * 3600).default(1800),
 });
 export type StepDef = z.infer<typeof StepDefSchema>;
@@ -133,6 +144,8 @@ export function validateWorkflowDef(def: WorkflowDef): string[] {
     if (s.type === 'KOAN_BOT' && !s.prompt.trim()) errors.push(`Step "${s.name}": the task for Kōan is empty`);
     if (s.type === 'KOAN_BOT' && !KOAN_COMMANDS.some((c) => c.key === s.koanCommand)) errors.push(`Step "${s.name}": unknown Kōan command "${s.koanCommand}"`);
     if (s.type === 'SHELL' && !s.command.trim()) errors.push(`Step "${s.name}": command is empty`);
+    for (const t of s.requiresTools) if (!TOOL_IDS.includes(t)) errors.push(`Step "${s.name}": unknown tool "${t}" (see the tool catalog)`);
+    for (const a of s.artifacts) if (a.startsWith('/') || a.split('/').includes('..')) errors.push(`Step "${s.name}": artifact pattern "${a}" must be relative to the workspace (no leading / and no ..)`);
     const keys = new Set<string>();
     for (const o of s.expectedOutputs) {
       if ((RESERVED_OUTPUT_KEYS as readonly string[]).includes(o.key)) errors.push(`Step "${s.name}": "${o.key}" is a reserved result field (needs_rework, rework_notes and observations are standard fields of every AI step)`);

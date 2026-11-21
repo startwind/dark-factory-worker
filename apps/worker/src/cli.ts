@@ -5,6 +5,8 @@ import { discoverAgents, mergeDiscovery, refreshAvailability } from './agents/di
 import { testAgent } from './agents/test.js';
 import { configPath, defaultConfig, loadConfig, loadIdentity, saveConfig, stateDir, workspacesDir, type WorkerConfig } from './config.js';
 import { formatPreflight, runPreflight } from './preflight.js';
+import { TOOL_CATALOG } from '@nova/shared';
+import { detectTools } from './tools.js';
 import { Worker } from './worker.js';
 
 const args = process.argv.slice(2);
@@ -90,6 +92,8 @@ async function main() {
       const cfg = loadConfig(path) ?? defaultConfig();
       const h = await runPreflight(cfg);
       for (const l of formatPreflight(h)) console.log(l);
+      console.log('\nTool catalog (what steps can require):');
+      for (const t of await detectTools()) { const d = TOOL_CATALOG.find((x) => x.id === t.id)!; console.log(`  ${t.available ? '✔' : '·'} ${d.label} [${t.id}]${t.version ? ` (${t.version})` : ''}${t.available ? '' : `\n      → ${d.hint}`}`); }
       process.exitCode = h.checks.some((c) => !c.ok && c.severity === 'required') ? 1 : 0;
       break;
     }
@@ -112,7 +116,7 @@ async function main() {
   init        discover + test agents, write worker.config.yaml   [--name N] [--server ws://host:3001] [--max-jobs N]
   discover    re-discover agents (source: auto is updated, source: manual is never touched)
   test [key]  test configured agents (must answer READY)
-  doctor      check required tools (git, ssh key, gh) and print what is missing
+  doctor      check required tools (git, ssh key, gh) and the tool catalog and print what is missing
   clean       delete leftover run workspaces   [--older-than HOURS] [--mirrors] [--dry-run]
   start       connect to the master app and process jobs (runs init on first start)
 `);

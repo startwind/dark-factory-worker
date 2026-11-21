@@ -1,12 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { STEP_CATALOG, STEP_CATEGORIES, findStepTemplate } from './stepCatalog.js';
 import { buildJsonSchema, extractRework } from './output.js';
+import { TOOL_IDS } from './toolCatalog.js';
 import { StepDefSchema, stepDependencies, stepLevels, validateWorkflowDef } from './workflow.js';
 
 describe('step marketplace catalog', () => {
-  it('ships 10 steps with unique ids and known categories', () => {
-    expect(STEP_CATALOG).toHaveLength(10);
-    expect(new Set(STEP_CATALOG.map((t) => t.id)).size).toBe(10);
+  it('ships 12 steps with unique ids and known categories', () => {
+    expect(STEP_CATALOG).toHaveLength(12);
+    expect(new Set(STEP_CATALOG.map((t) => t.id)).size).toBe(12);
     for (const t of STEP_CATALOG) {
       expect(t.id.startsWith('builtin/')).toBe(true);
       expect(STEP_CATEGORIES).toContain(t.category);
@@ -120,5 +121,14 @@ describe('dependencies and parallel steps', () => {
     const bad = validateWorkflowDef(wf(st('a', { dependsOn: [] }), st('b', { dependsOn: [] }), pr({ dependsOn: ['a'] }))).join();
     expect(bad).toContain('has to wait for all other steps');
     expect(bad).toContain('"b"');
+  });
+
+  it('every tool a template requires is in the tool catalog; the screenshot steps need Playwright and keep their images as artifacts', () => {
+    for (const t of STEP_CATALOG) for (const id of t.step.requiresTools) expect(TOOL_IDS, `${t.id} -> ${id}`).toContain(id);
+    for (const id of ['builtin/screenshots-before', 'builtin/screenshots-after']) {
+      const t = STEP_CATALOG.find((x) => x.id === id)!;
+      expect(t.step.requiresTools).toContain('playwright');
+      expect(t.step.artifacts.length).toBeGreaterThan(0);
+    }
   });
 });

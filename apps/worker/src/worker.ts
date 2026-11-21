@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { hostname, platform } from 'node:os';
 import { io, type Socket } from 'socket.io-client';
 import { fingerprint, signChallenge, type WorkerIdentity } from '@nova/shared/identity';
-import type { JobPayload, LogChunk, WorkerAgentInfo, WorkerAuthPayload, WorkerHealth, WorkerHello } from '@nova/shared';
+import { missingTools, schedulingToolIds, type JobPayload, type LogChunk, type WorkerAgentInfo, type WorkerAuthPayload, type WorkerHealth, type WorkerHello, type WorkerToolInfo } from '@nova/shared';
 import { adapterFor } from './agents/adapters.js';
 import { rescanAgents } from './agents/rescan.js';
 import { installDir, pullAndInstall, restartSelf } from './selfUpdate.js';
@@ -10,6 +10,7 @@ import { saveConfig, type WorkerConfig } from './config.js';
 import { JobRunner, type ServerLink } from './jobRunner.js';
 import { Podman } from './podman.js';
 import { formatPreflight, runPreflight } from './preflight.js';
+import { describeMissing, detectTools } from './tools.js';
 import { validateProject } from './validate.js';
 
 /** Version of the installed worker = version in apps/worker/package.json (kept in step with the app releases). */
@@ -30,6 +31,7 @@ export class Worker {
   private hb: NodeJS.Timeout | null = null;
   private approved = false;
   private health?: WorkerHealth;
+  private tools: WorkerToolInfo[] = [];
   private podman: Podman;
 
   private rescanning = false;
@@ -45,7 +47,7 @@ export class Worker {
   private hello(): WorkerHello {
     return {
       fingerprint: fingerprint(this.identity.publicKey), publicKey: this.identity.publicKey, name: this.cfg.worker.name, hostname: hostname(), platform: platform(),
-      maxConcurrentJobs: this.cfg.worker.maxConcurrentJobs, agents: agentInfos(this.cfg), activeJobs: [...this.jobs.keys()], version: VERSION, health: this.health,
+      maxConcurrentJobs: this.cfg.worker.maxConcurrentJobs, agents: agentInfos(this.cfg), tools: this.tools, activeJobs: [...this.jobs.keys()], version: VERSION, health: this.health,
     };
   }
 
@@ -53,9 +55,11 @@ export class Worker {
   async start() {
     // One-time tool check; the result is sent to the master app in every (re)connect handshake.
     this.health = await runPreflight(this.cfg);
+    this.tools = await detectTools();
     this.log('Tool check:');
     for (const l of formatPreflight(this.health)) this.log(l);
     const missing = this.health.checks.filter((c) => !c.ok);
+    this.log(`Tool catalog: ${this.tools.filter((t) => t.available).map((t) => t.id).join(', ') || 'nothing'} available${this.tools.some((t) => !t.available) ? `; missing: ${this.tools.filter((t) => !t.available).map((t) => t.id).join(', ')}` : ''}`);
     if (missing.length) this.log(`⚠ ${missing.length} tool(s) missing - reported to the master app${missing.some((c) => c.severity === 'required') ? ' (jobs will fail until the required ones are fixed)' : ''}`);
     this.socket = io(`${this.serverHttp()}/worker`, {
       transports: ['websocket'], reconnection: true, reconnectionDelay: 1000, reconnectionDelayMax: 10_000,
@@ -125,7 +129,9 @@ export class Worker {
       this.log('↻ rescanning agents (requested from the web app)…');
       this.cfg = await rescanAgents(this.cfg, this.log);
       if (this.cfgPath) saveConfig(this.cfgPath, this.cfg);
-      this.socket.emit('worker:capabilities', { agents: agentInfos(this.cfg), maxConcurrentJobs: this.cfg.worker.maxConcurrentJobs });
+      this.log('↻ rescanning tools…');
+      this.tools = await detectTools();
+      this.socket.emit('worker:capabilities', { agents: agentInfos(this.cfg), tools: this.tools, maxConcurrentJobs: this.cfg.worker.maxConcurrentJobs });
     } catch (e) {
       this.log(`✘ rescan failed: ${(e as Error).message}`);
     } finally {
@@ -172,6 +178,18 @@ export class Worker {
     if (missing.length) {
       this.socket.emit('job:rejected', { runId: job.runId, assignmentId: job.assignmentId, reason: `agent(s) not available: ${[...new Set(missing)].join(', ')}` });
       return;
+    }
+    // host tools are checked again right now (the scheduler matched them against the last report); workspace tools are checked by the job in its real environment
+    const hostTools = schedulingToolIds(job.workflow, true);
+    if (hostTools.length) {
+      const now = await detectTools(undefined, hostTools);
+      const lacking = missingTools(hostTools, now.filter((t) => t.available).map((t) => t.id));
+      if (lacking.length) {
+        this.tools = [...this.tools.filter((t) => !hostTools.includes(t.id)), ...now];
+        this.socket.emit('job:rejected', { runId: job.runId, assignmentId: job.assignmentId, reason: `tool(s) not available on this worker: ${describeMissing(lacking)}` });
+        this.socket.emit('worker:capabilities', { agents: agentInfos(this.cfg), tools: this.tools, maxConcurrentJobs: this.cfg.worker.maxConcurrentJobs });
+        return;
+      }
     }
     const runner = new JobRunner(job, this.cfg, this.link(), this.podman);
     this.jobs.set(job.runId, runner);
