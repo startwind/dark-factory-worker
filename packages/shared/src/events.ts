@@ -141,6 +141,8 @@ export type Ack<T = unknown> = (res: { ok: true; data?: T } | { ok: false; error
 export interface WorkerToServer {
   'worker:heartbeat': (p: { activeJobs: string[]; freeSlots: number }, ack?: Ack) => void;
   'worker:capabilities': (p: { agents: WorkerAgentInfo[]; maxConcurrentJobs: number }, ack?: Ack) => void;
+  /** progress of a self-update the web app asked for */
+  'worker:update-status': (p: { state: 'updating' | 'restarting' | 'failed'; message: string }) => void;
   'worker:status': (p: { freeSlots: number; activeJobs: string[] }) => void;
   'job:accepted': (p: { runId: string; assignmentId: string }, ack?: Ack) => void;
   'job:rejected': (p: { runId: string; assignmentId: string; reason: string }, ack?: Ack) => void;
@@ -172,6 +174,10 @@ export interface ServerToWorker {
   'job:stop-requested': (p: { runId: string; reason: string; requestedBy: string }) => void;
   'approval:resolved': (p: { runId: string; stepId: string; approved: boolean; by: string }) => void;
   'validation:request': (p: ValidationJobPayload) => void;
+  /** re-discover and re-test the installed agents (e.g. after installing claude/codex), then report them with worker:capabilities */
+  'worker:rescan-agents': () => void;
+  /** git pull + npm install in the worker's install directory, then restart (refused while jobs are running) */
+  'worker:self-update': () => void;
   'server:error': (p: { message: string }) => void;
 }
 

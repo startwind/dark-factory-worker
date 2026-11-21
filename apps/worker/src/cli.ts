@@ -1,7 +1,9 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { join } from 'node:path';
 import { discoverAgents, mergeDiscovery, refreshAvailability } from './agents/discover.js';
 import { testAgent } from './agents/test.js';
-import { configPath, defaultConfig, loadConfig, loadIdentity, saveConfig, type WorkerConfig } from './config.js';
+import { configPath, defaultConfig, loadConfig, loadIdentity, saveConfig, stateDir, workspacesDir, type WorkerConfig } from './config.js';
 import { formatPreflight, runPreflight } from './preflight.js';
 import { Worker } from './worker.js';
 
@@ -42,6 +44,31 @@ async function init(): Promise<WorkerConfig> {
   return cfg;
 }
 
+const dirSize = (d: string): string => { try { return execFileSync('du', ['-sh', d], { encoding: 'utf8' }).split('\t')[0]!; } catch { return '?'; } };
+
+/** Remove leftover run workspaces (kept after failed/stopped jobs) and optionally the git mirrors. */
+function clean() {
+  const dry = args.includes('--dry-run');
+  const olderH = flag('--older-than') ? Number(flag('--older-than')) : 0;
+  const targets: string[] = [];
+  const ws = workspacesDir();
+  if (existsSync(ws)) {
+    for (const n of readdirSync(ws)) {
+      const d = join(ws, n);
+      const ageH = (Date.now() - statSync(d).mtimeMs) / 3_600_000;
+      if (ageH >= olderH) targets.push(d);
+    }
+  }
+  if (args.includes('--mirrors') && existsSync(join(stateDir(), 'mirrors'))) targets.push(join(stateDir(), 'mirrors'));
+  if (!targets.length) return void console.log('Nothing to clean.');
+  console.log(`${dry ? 'Would remove' : 'Removing'} (stop a running worker first!):`);
+  for (const t of targets) {
+    console.log(`  ${dirSize(t).padStart(6)}  ${t}`);
+    if (!dry) rmSync(t, { recursive: true, force: true });
+  }
+  console.log(dry ? 'Dry run - nothing deleted.' : `✔ cleaned. Remaining: ${dirSize(stateDir())} in ${stateDir()}`);
+}
+
 async function main() {
   switch (cmd) {
     case 'init': await init(); break;
@@ -66,12 +93,13 @@ async function main() {
       process.exitCode = h.checks.some((c) => !c.ok && c.severity === 'required') ? 1 : 0;
       break;
     }
+    case 'clean': clean(); break;
     case 'start': {
       let cfg = loadConfig(path);
       if (!cfg) cfg = await init();
       else cfg = await refreshAvailability(cfg); // normal start: availability check only, no discovery
       for (const [k, e] of Object.entries(cfg.agents)) console.log(`  agent ${k}: ${e.available ? 'available' : 'NOT available'} (${e.runtime ?? 'container'}, ${e.source})`);
-      const w = new Worker(cfg, loadIdentity());
+      const w = new Worker(cfg, loadIdentity(), console.log, path);
       await w.start();
       const bye = () => { console.log('\nshutting down…'); w.stop(); process.exit(0); };
       process.on('SIGINT', bye);
@@ -85,6 +113,7 @@ async function main() {
   discover    re-discover agents (source: auto is updated, source: manual is never touched)
   test [key]  test configured agents (must answer READY)
   doctor      check required tools (git, ssh key, gh) and print what is missing
+  clean       delete leftover run workspaces   [--older-than HOURS] [--mirrors] [--dry-run]
   start       connect to the master app and process jobs (runs init on first start)
 `);
   }

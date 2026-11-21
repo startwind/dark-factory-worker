@@ -10,6 +10,8 @@ export const ExpectedOutputSchema = z.object({
   type: OutputTypeSchema,
   required: z.boolean().default(true),
   instruction: z.string().default(''),
+  /** numeric outputs are metrics: show them as chips in the run overview (step box) */
+  showInOverview: z.boolean().default(true),
 });
 export type ExpectedOutput = z.infer<typeof ExpectedOutputSchema>;
 

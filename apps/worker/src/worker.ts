@@ -1,15 +1,21 @@
+import { readFileSync } from 'node:fs';
 import { hostname, platform } from 'node:os';
 import { io, type Socket } from 'socket.io-client';
 import { fingerprint, signChallenge, type WorkerIdentity } from '@nova/shared/identity';
 import type { JobPayload, LogChunk, WorkerAgentInfo, WorkerAuthPayload, WorkerHealth, WorkerHello } from '@nova/shared';
 import { adapterFor } from './agents/adapters.js';
-import type { WorkerConfig } from './config.js';
+import { rescanAgents } from './agents/rescan.js';
+import { installDir, pullAndInstall, restartSelf } from './selfUpdate.js';
+import { saveConfig, type WorkerConfig } from './config.js';
 import { JobRunner, type ServerLink } from './jobRunner.js';
 import { Podman } from './podman.js';
 import { formatPreflight, runPreflight } from './preflight.js';
 import { validateProject } from './validate.js';
 
-const VERSION = '0.1.0';
+/** Version of the installed worker = version in apps/worker/package.json (kept in step with the app releases). */
+const VERSION = (() => {
+  try { return (JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version?: string }).version ?? '0.0.0'; } catch { return '0.0.0'; }
+})();
 
 export function agentInfos(cfg: WorkerConfig): WorkerAgentInfo[] {
   return Object.entries(cfg.agents).map(([key, e]) => ({
@@ -26,7 +32,9 @@ export class Worker {
   private health?: WorkerHealth;
   private podman: Podman;
 
-  constructor(private cfg: WorkerConfig, private identity: WorkerIdentity, private log: (m: string) => void = console.log) {
+  private rescanning = false;
+  private updating = false;
+  constructor(private cfg: WorkerConfig, private identity: WorkerIdentity, private log: (m: string) => void = console.log, private cfgPath?: string) {
     this.podman = new Podman(cfg.podman.command);
   }
 
@@ -74,6 +82,8 @@ export class Worker {
     s.on('worker:approved', () => { this.approved = true; this.log('✔ this worker is APPROVED by the master app'); });
     s.on('server:error', (p: { message: string }) => this.log(`server: ${p.message}`));
     s.on('validation:request', (p) => void this.onValidation(p));
+    s.on('worker:rescan-agents', () => void this.onRescan());
+    s.on('worker:self-update', () => void this.onSelfUpdate());
     s.on('job:assigned', (job: JobPayload) => void this.onAssigned(job));
     s.on('job:stop-requested', (p: { runId: string; reason: string }) => {
       const j = this.jobs.get(p.runId);
@@ -84,13 +94,52 @@ export class Worker {
     if (!this.approved) this.log('… waiting for approval in the web app (Workers → Approve) if this is the first connection');
   }
 
+  /** Requested from the web app: pull the new worker code, install, restart. Never while jobs are running. */
+  private async onSelfUpdate() {
+    const say = (state: 'updating' | 'restarting' | 'failed', message: string) => { this.log(message); this.socket.emit('worker:update-status', { state, message }); };
+    if (this.updating) return;
+    if (this.jobs.size > 0) return say('failed', `${this.jobs.size} job(s) are running - update again when they are done`);
+    this.updating = true;
+    this.heartbeat(); // 0 free slots from now on
+    try {
+      say('updating', 'Updating: git pull + npm install…');
+      const dir = await installDir();
+      const { before, after } = await pullAndInstall(dir, this.log);
+      if (before === after) { this.updating = false; this.heartbeat(); return say('failed', `Already on the newest worker code in the repository (v${after}) - nothing changed`); }
+      say('restarting', `Updated v${before} → v${after}, restarting…`);
+      await new Promise((r) => setTimeout(r, 800)); // let the status reach the server
+      this.stop();
+      restartSelf(this.log);
+    } catch (e) {
+      this.updating = false;
+      this.heartbeat();
+      say('failed', `Update failed: ${(e as Error).message}`);
+    }
+  }
+
+  /** Requested from the web app: look for newly installed agents, test them, report the result. */
+  private async onRescan() {
+    if (this.rescanning) return;
+    this.rescanning = true;
+    try {
+      this.log('↻ rescanning agents (requested from the web app)…');
+      this.cfg = await rescanAgents(this.cfg, this.log);
+      if (this.cfgPath) saveConfig(this.cfgPath, this.cfg);
+      this.socket.emit('worker:capabilities', { agents: agentInfos(this.cfg), maxConcurrentJobs: this.cfg.worker.maxConcurrentJobs });
+    } catch (e) {
+      this.log(`✘ rescan failed: ${(e as Error).message}`);
+    } finally {
+      this.rescanning = false;
+    }
+  }
+
   stop() {
     if (this.hb) clearInterval(this.hb);
     this.socket?.disconnect();
   }
 
   private freeSlots() {
-    return Math.max(0, this.cfg.worker.maxConcurrentJobs - this.jobs.size);
+    return this.updating ? 0 : Math.max(0, this.cfg.worker.maxConcurrentJobs - this.jobs.size); // no new jobs while updating
   }
   private heartbeat() {
     this.socket.emit('worker:heartbeat', { activeJobs: [...this.jobs.keys()], freeSlots: this.freeSlots() });

@@ -20,7 +20,7 @@ export interface StepTemplate {
   step: Omit<StepDef, 'id'>;
 }
 
-const out = (key: string, type: 'string' | 'number' | 'boolean', instruction: string, required = true) => ({ key, type, required, instruction });
+const out = (key: string, type: 'string' | 'number' | 'boolean', instruction: string, required = true) => ({ key, type, required, instruction, showInOverview: true });
 
 function tpl(t: { id: string; category: StepCategory; description: string; step: Partial<StepDef> & Pick<StepDef, 'name' | 'type'> }): StepTemplate {
   const { id: _id, ...step } = StepDefSchema.parse({ id: 'template', ...t.step, description: t.description });
@@ -49,7 +49,7 @@ export const STEP_CATALOG: StepTemplate[] = [
   tpl({
     id: 'run-tests', category: 'Quality',
     description: 'Runs the project\'s test suite (`npm test`) and fails the workflow when tests fail.',
-    step: { name: 'Run Tests', type: 'SHELL', command: 'npm test --if-present', jiraComment: true, timeoutSec: 1800 },
+    step: { name: 'Run Tests', type: 'SHELL', command: 'if [ -f package.json ]; then npm test --if-present; else echo "No package.json - no tests to run"; fi', jiraComment: true, timeoutSec: 1800 },
   }),
   tpl({
     id: 'lint', category: 'Quality',

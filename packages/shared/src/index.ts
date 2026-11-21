@@ -5,4 +5,5 @@ export * from './output.js';
 export * from './redact.js';
 export * from './events.js';
 export * from './constants.js';
+export * from './versions.js';
 export * from './statusMapping.js';

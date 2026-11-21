@@ -5,9 +5,9 @@ import { makeRedactor } from './redact.js';
 import { fingerprint, generateIdentity, signChallenge, verifyChallenge } from './identity.js';
 
 const outputs = [
-  { key: 'findings_count', type: 'number' as const, required: true, instruction: 'count' },
-  { key: 'summary', type: 'string' as const, required: true, instruction: '' },
-  { key: 'tags', type: 'array' as const, required: false, instruction: '' },
+  { key: 'findings_count', type: 'number' as const, required: true, instruction: 'count', showInOverview: true },
+  { key: 'summary', type: 'string' as const, required: true, instruction: '', showInOverview: true },
+  { key: 'tags', type: 'array' as const, required: false, instruction: '', showInOverview: true },
 ];
 
 describe('expected output validation', () => {

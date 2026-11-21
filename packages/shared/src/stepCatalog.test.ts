@@ -50,7 +50,7 @@ describe('send back', () => {
     expect(validateWorkflowDef({ groups: [{ id: 'g', name: 'G', steps: [shell, s('qa', { sendBack: { goToStepId: 'sh' } })] }] }).join()).toContain('not one');
   });
   it('standard result fields needs_rework/rework_notes/observations are reserved output keys', () => {
-    const out = (key: string) => [{ key, type: 'string' as const, required: false, instruction: '' }];
+    const out = (key: string) => [{ key, type: 'string' as const, required: false, instruction: '', showInOverview: true }];
     for (const k of ['needs_rework', 'rework_notes', 'observations']) expect(validateWorkflowDef(wf(s('a', { expectedOutputs: out(k) }))).join()).toContain('reserved');
     expect(validateWorkflowDef(wf(s('a', { expectedOutputs: out('status') })))).toEqual([]); // "status" is free to use
   });
