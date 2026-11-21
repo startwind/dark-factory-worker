@@ -43,13 +43,14 @@ export async function pullAndInstall(dir: string, log: (m: string) => void): Pro
 export const isSupervised = () => !!process.env.NOVA_SUPERVISED || !!process.env.INVOCATION_ID || (!!process.env.XPC_SERVICE_NAME && process.env.XPC_SERVICE_NAME !== '0');
 
 /**
- * Restart into the new code. Under a service manager: just exit, it starts us again.
+ * Restart into the new code. Under a service manager: just exit (code 75), it starts us again.
  * Otherwise start the same command detached (output goes to ~/.nova-worker/worker.log) and exit.
  */
 export function restartSelf(log: (m: string) => void): never {
   if (isSupervised()) {
+    // non-zero on purpose: systemd's common `Restart=on-failure` does not restart after a clean exit(0); launchd/`Restart=always` restart either way
     log('✔ updated - exiting, the service manager restarts the worker');
-    process.exit(0);
+    process.exit(75);
   }
   const dir = join(homedir(), '.nova-worker');
   mkdirSync(dir, { recursive: true });
